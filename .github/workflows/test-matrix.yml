@@ -1,0 +1,77 @@
+name: Matrix aggregation test
+
+# Mock workflow that mirrors the structure of public-actions/ci.yml
+# to validate two things:
+#   1. matrix parallelism with fail-fast: false (one group can fail
+#      without cancelling the others)
+#   2. needs.ci-tasks.result correctly aggregates across matrix
+#      instances (success only when every instance succeeds)
+on:
+  workflow_dispatch:
+    inputs:
+      force_fail_group:
+        description: 'Group name to force-fail (empty = all pass)'
+        required: false
+        default: ''
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      snapshot: ${{ steps.s.outputs.snapshot }}
+    steps:
+      - id: s
+        run: echo "snapshot=fake-snapshot-$(date +%s)" >> $GITHUB_OUTPUT
+
+  ci-tasks:
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        group: [goldfish, qemu, sil, aurix, flagchip]
+        include:
+          - group: goldfish
+            tasks: [goldfish-arm64-v8a-ap, goldfish-armeabi-v7a-ap, goldfish-x86_64-ap]
+          - group: qemu
+            tasks: [qemu-arm64-v8a-ap, qemu-arm64-v8a-server, qemu-armeabi-v7a-ap, qemu-armeabi-v7a-bl, qemu-armeabi-v7a-server, qemu-armeabi-v7a-tee, qemu-armeabi-v8m-ap]
+          - group: sil
+            tasks: [ksil_arm32r_nsh_core0, ksil_arm32r_nsh_bl]
+          - group: aurix
+            tasks: [bl, core0, core1, core2, core3, core4, core5]
+          - group: flagchip
+            tasks: [kbl, kcore0]
+      fail-fast: false
+    steps:
+      - name: Simulate builds
+        env:
+          FORCE_FAIL: ${{ inputs.force_fail_group }}
+          GROUP: ${{ matrix.group }}
+        run: |
+          echo "=== Group: $GROUP ==="
+          for t in ${{ join(matrix.tasks, ' ') }}; do
+            echo "  build task $t (simulated)"
+            sleep 0.1
+          done
+          if [ "$GROUP" = "$FORCE_FAIL" ]; then
+            echo "Forced failure for group $GROUP"
+            exit 1
+          fi
+          echo "Group $GROUP succeeded"
+
+  post-processing:
+    needs: [setup, ci-tasks]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show aggregated result
+        env:
+          CI_TASKS_RESULT: ${{ needs.ci-tasks.result }}
+        run: |
+          echo "needs.ci-tasks.result = $CI_TASKS_RESULT"
+          if [ "$CI_TASKS_RESULT" = "success" ]; then
+            ci_status="success"
+          else
+            ci_status="failure"
+          fi
+          echo "ci_status=$ci_status"
+          echo "::notice title=Aggregated CI status::$ci_status (raw result: $CI_TASKS_RESULT)"
